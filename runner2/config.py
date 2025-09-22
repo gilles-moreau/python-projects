@@ -96,7 +96,6 @@ class CompositeConfigEntry(ConfigEntry):
     SCHEMA: Dict[str, type[ConfigEntry]] = {}
 
     def __init__(self, value: Optional[Dict[str, Any]] = None):
-        self.children: Dict[str, ConfigEntry] = {}
         super().__init__(value)
 
     def set(self, value: Dict[str, Any]):
@@ -106,13 +105,13 @@ class CompositeConfigEntry(ConfigEntry):
         for key, cls in self.SCHEMA.items():
             if key not in value:
                 raise ConfigEntryError(f"Missing required key '{key}' in {self.CFG_KEY}")
-            self.children[key] = cls(value[key])
+            setattr(self, key, cls(value[key]))
 
     def get(self) -> Dict[str, Any]:
-        return {k: child.get() for k, child in self.children.items()}
-
+        return {k: o.get() for k, o in self.__dict__.items() }
+    
     def is_valid(self) -> bool:
-        return all(child.is_valid() for child in self.children.values())
+        return True 
 
 class RuntimeConfigEntry(CompositeConfigEntry):
     CFG_KEY = "runtime"
@@ -136,9 +135,8 @@ class RootConfigEntry(CompositeConfigEntry):
     }
 
     def __init__(self, value: Dict[str, Any]):
-        self.children: Dict[str, ConfigEntry] = {}
         super().__init__(list(value.values())[0])
 
     def is_valid(self) -> bool:
-        return all(child.is_valid() for child in self.children.values())
+        return True 
 

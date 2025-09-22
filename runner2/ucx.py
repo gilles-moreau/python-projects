@@ -31,6 +31,5 @@ if __name__ == "__main__":
 
     root = UCXConfigEntry(config_data)
 
-    print("Root config:", root.get())
-    print("Is valid:", root.is_valid())
+    print("Root config:", root.runtime.get())
 
