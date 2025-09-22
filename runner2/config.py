@@ -1,6 +1,6 @@
 import abc
 import logging
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, Dict, List, Optional
 
 logging.basicConfig()
 logging.getLogger().setLevel(logging.INFO)
@@ -33,15 +33,14 @@ class ConfigEntryError(Exception):
 
 class ConfigEntry(metaclass=AutoRegisterConfigEntryMeta):
     CFG_KEY: Optional[str] = None
-    CFG_STR: Optional[str] = None
 
-    def __init__(self, value: Any = None):
+    def __init__(self, value: Any = None, required: Any = None):
         self.value = None
         if value is not None:
-            self.set(value)
+            self.set(value, required)
 
     @abc.abstractmethod
-    def set(self, value: Any):
+    def set(self, value: Any, required: Any):
         pass
 
     @abc.abstractmethod
@@ -56,7 +55,6 @@ class ConfigEntry(metaclass=AutoRegisterConfigEntryMeta):
 
 class IntConfigEntry(ConfigEntry):
     CFG_KEY = None
-    CFG_STR = None
 
     def set(self, value: Any):
         if not isinstance(value, int):
@@ -71,9 +69,8 @@ class IntConfigEntry(ConfigEntry):
 
 class StrConfigEntry(ConfigEntry):
     CFG_KEY = None 
-    CFG_STR = None 
 
-    def set(self, value: Any):
+    def set(self, value: Any, required: Any):
         if not isinstance(value, str):
             raise ConfigEntryError(f"Expected str, got {type(value)}")
         self.value = value
@@ -89,54 +86,77 @@ class CompositeConfigEntry(ConfigEntry):
     Composite entry that contains multiple ConfigEntry children.
     This allows recursive nesting.
     """
-
     CFG_KEY = None 
-    CFG_STR = None 
+    SCHEMA: Optional[Dict[str, ConfigEntry]] = None
 
-    SCHEMA: Dict[str, type[ConfigEntry]] = {}
+    def __init__(self, value: Optional[Dict[str, Any]] = None, 
+                 required: Optional[Dict[str, ConfigEntry]] = None):
+        super().__init__(value, required)
 
-    def __init__(self, value: Optional[Dict[str, Any]] = None):
-        super().__init__(value)
-
-    def set(self, value: Dict[str, Any]):
+    def set(self, value: Dict[str, Any], required: Dict[str, ConfigEntry]):
         if not isinstance(value, dict):
             raise ConfigEntryError("Composite entry must be a dict")
-
-        for key, cls in self.SCHEMA.items():
+  
+        for key, cls in required.items():
             if key not in value:
-                raise ConfigEntryError(f"Missing required key '{key}' in {self.CFG_KEY}")
-            setattr(self, key, cls(value[key]))
+                raise ConfigEntryError(f"Missing required key '{key}'")
+            if not hasattr(self, key):
+                setattr(self, key, cls(value[key]))
+            else:
+                getattr(self, key)(value[key])
 
     def get(self) -> Dict[str, Any]:
         return {k: o.get() for k, o in self.__dict__.items() }
     
     def is_valid(self) -> bool:
-        return True 
+        return all(key in self.__dict__.items() for key in self.SCHEMA.keys())
 
 class RuntimeConfigEntry(CompositeConfigEntry):
-    CFG_KEY = "runtime"
+    CFG_KEY = None 
 
     SCHEMA = {
-        "program": StrConfigEntry,
-        "args": StrConfigEntry,
+        'program': StrConfigEntry,
+        'args': StrConfigEntry 
     }
 
-class EnvironmentConfigEntry(CompositeConfigEntry):
-    CFG_KEY = "environment"
+    def __init__(self, value: Dict[str, Any]):
+        super().__init__(value, RuntimeConfigEntry.SCHEMA)
 
-    SCHEMA = Dict[str, ConfigEntry]
+class EnvironmentConfigEntry(CompositeConfigEntry):
+    CFG_KEY = None 
+
+    SCHEMA: Optional[Dict[str, ConfigEntry]] = None
+
+    def set(self, value: Dict[str, Any], required: Dict[str, Any]):
+        for key in value.keys():
+            setattr(self, key, StrConfigEntry(str(value[key])))
 
 class RootConfigEntry(CompositeConfigEntry):
     CFG_KEY = None 
 
-    SCHEMA = { 
-        "runtime": RuntimeConfigEntry, 
-        "environment": EnvironmentConfigEntry,
+    SCHEMA = {
+        'runtime': RuntimeConfigEntry,
+        'environment': EnvironmentConfigEntry
     }
 
     def __init__(self, value: Dict[str, Any]):
-        super().__init__(list(value.values())[0])
+        super().__init__(value, RootConfigEntry.SCHEMA)
 
     def is_valid(self) -> bool:
         return True 
 
+class Config():
+
+    def __init__(self, value: Dict[str, Any]):
+        if len(value.keys()) > 1:
+            raise ConfigEntryError(f"Root config must have only one key.")
+
+        # take root key and then class
+        rkey = next(iter(value))
+        root = GetConfigEntryClass(RootConfigEntry, CFG_KEY=rkey)
+
+        if (not issubclass(root, RootConfigEntry)):
+            raise ConfigEntryError(f"Provided config is not a root config.")
+
+        self.root = root(value[rkey])
+        

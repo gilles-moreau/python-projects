@@ -1,19 +1,16 @@
 import config
-
-class UCXVerbose(config.IntConfigEntry):
-    CFG_KEY = "verbose"
+from typing import Any, Dict, List, Optional
 
 class UCXEnvironmentConfigEntry(config.EnvironmentConfigEntry):
-    SCHEMA = {
-        "verbose": config.IntConfigEntry
-    }
+    verbose: config.IntConfigEntry 
 
 class UCXConfigEntry(config.RootConfigEntry):
     CFG_KEY = "ucx"
 
-    SCHEMA = config.RootConfigEntry.SCHEMA | {
-        "environment": UCXEnvironmentConfigEntry
-    }
+    def __init__(self, value: Dict[str, Any]):
+        self.environment = UCXEnvironmentConfigEntry
+
+        super().__init__(value)
 
 if __name__ == "__main__":
     # Create a composite config with nested entries
@@ -29,7 +26,7 @@ if __name__ == "__main__":
         }
     }
 
-    root = UCXConfigEntry(config_data)
+    ucx = config.Config(config_data)
 
-    print("Root config:", root.runtime.get())
+    print("Root config:", ucx.root.runtime.program)
 
