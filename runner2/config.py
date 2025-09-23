@@ -1,162 +1,242 @@
-import abc
-import logging
-from typing import Any, Dict, List, Optional
+import subprocess
+import re
+import json
+from typing import Any, Optional
 
-logging.basicConfig()
-logging.getLogger().setLevel(logging.INFO)
+from base import \
+    GetConfigEntryClass, \
+    ConfigEntryError, \
+    CompositeConfigEntry, \
+    StrConfigEntry, \
+    IntConfigEntry, \
+    EnumConfigEntry, \
+    PathConfigEntry, \
+    TableConfigEntry, \
+    ProgramConfigEntry, \
+    ExecutableConfigEntry, \
+    _CFG_REGISTRY
 
-_CFG_REGISTRY: Dict[str, "ConfigEntry"] = {}
+# ---- Parallel Library Entries ----
 
+class LibraryEntry(CompositeConfigEntry):
+    SCHEMA = {
+        "install": PathConfigEntry,
+        "environment": TableConfigEntry
+    }
 
-def GetConfigEntryClass(base_class, **kwargs):
-    key = kwargs["CFG_KEY"]
-    if key not in _CFG_REGISTRY:
-        logging.fatal("Command arg not defined: " + str(key))
-        exit(1)
+    def __str__(self):
+        s = ""
+        for row in self._environment.get():
+            for k, v in row.items():
+                s += f"export {k}={v}\n"
+        return s
 
-    return _CFG_REGISTRY.get(key)
+# ---- MPI Library ----
 
-
-class AutoRegisterConfigEntryMeta(abc.ABCMeta):
-    """Metaclass that auto-registers subclasses by CFG_KEY."""
-
-    def __init__(cls, name, bases, dct):
-        if getattr(cls, "CFG_KEY", None):
-            _CFG_REGISTRY[cls.CFG_KEY] = cls
-        super().__init__(name, bases, dct)
-
-
-class ConfigEntryError(Exception):
-    def __init__(self, message="Invalid parameter"):
-        super().__init__(message)
-
-
-class ConfigEntry(metaclass=AutoRegisterConfigEntryMeta):
-    CFG_KEY: Optional[str] = None
-
-    def __init__(self, value: Any = None, required: Any = None):
-        self.value = None
-        if value is not None:
-            self.set(value, required)
-
-    @abc.abstractmethod
-    def set(self, value: Any, required: Any):
-        pass
-
-    @abc.abstractmethod
-    def get(self) -> Any:
-        pass
-
-    @abc.abstractmethod
-    def is_valid(self) -> bool:
-        pass
-
-# ---- Example concrete entries ----
-
-class IntConfigEntry(ConfigEntry):
-    CFG_KEY = None
+class MPIInstallEntry(PathConfigEntry):
+    """
+    A PathConfigEntry that must point to an MPI installation.
+    Validation: runs `<path>/bin/mpirun --version`.
+    """
 
     def set(self, value: Any):
-        if not isinstance(value, int):
-            raise ConfigEntryError(f"Expected int, got {type(value)}")
-        self.value = value
+        super().set(value)  # validates path exists
+        bin_dir = self.path / "bin" / "ompi_info"
+        if not bin_dir.exists():
+            raise ConfigEntryError(f"No mpirun binary found in {self.path}/bin")
 
-    def get(self) -> int:
-        return self.value
+        try:
+            result = subprocess.run(
+                [str(bin_dir), "--version"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            match = re.search(r"Open MPI v([0-9]+\.[0-9]+\.[0-9]+)", result.stdout)
+            if not match:
+                raise ConfigEntryError(
+                    f"Could not get version from ucx_info: {result.stdout}"
+                )
+            self.version = match.group(1)
+        except subprocess.CalledProcessError as e:
+            raise ConfigEntryError(
+                f"mpirun failed in {self.path}: {e.stderr.strip()}"
+            )
 
-    def is_valid(self) -> bool:
-        return isinstance(self.value, int)
+    def get(self) -> dict:
+        return {"path": str(self.path), "version": self.version}
 
-class StrConfigEntry(ConfigEntry):
-    CFG_KEY = None 
+class MPILibraryEntry(LibraryEntry):
+    SCHEMA = {
+        "install": MPIInstallEntry
+    }
 
-    def set(self, value: Any, required: Any):
-        if not isinstance(value, str):
-            raise ConfigEntryError(f"Expected str, got {type(value)}")
-        self.value = value
+# ---- UCX Library ----
 
-    def get(self) -> str:
-        return self.value
-
-    def is_valid(self) -> bool:
-        return isinstance(self.value, str)
-
-class CompositeConfigEntry(ConfigEntry):
+class UCXInstallEntry(PathConfigEntry):
     """
-    Composite entry that contains multiple ConfigEntry children.
-    This allows recursive nesting.
+    A PathConfigEntry that must point to a UCX installation.
+    Validation: runs `<path>/bin/ucx_info --version`.
     """
-    CFG_KEY = None 
-    SCHEMA: Optional[Dict[str, ConfigEntry]] = None
 
-    def __init__(self, value: Optional[Dict[str, Any]] = None, 
-                 required: Optional[Dict[str, ConfigEntry]] = None):
-        super().__init__(value, required)
+    def set(self, value: Any):
+        super().set(value)  # validates path exists
+        bin_dir = self.path / "bin" / "ucx_info"
+        if not bin_dir.exists():
+            raise ConfigEntryError(f"No ucx_info binary found in {self.path}/bin")
 
-    def set(self, value: Dict[str, Any], required: Dict[str, ConfigEntry]):
-        if not isinstance(value, dict):
-            raise ConfigEntryError("Composite entry must be a dict")
-  
-        for key, cls in required.items():
-            if key not in value:
-                raise ConfigEntryError(f"Missing required key '{key}'")
-            if not hasattr(self, key):
-                setattr(self, key, cls(value[key]))
-            else:
-                getattr(self, key)(value[key])
+        try:
+            result = subprocess.run(
+                [str(bin_dir), "-v"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            match = re.search(r"# Library version: ([0-9]+\.[0-9]+\.[0-9]+)", result.stdout)
+            if not match:
+                raise ConfigEntryError(
+                    f"Could not get version from ucx_info: {result.stdout}"
+                )
+            self.version = match.group(1)
+        except subprocess.CalledProcessError as e:
+            raise ConfigEntryError(
+                f"ucx_info failed in {self.path}: {e.stderr.strip()}"
+            )
 
-    def get(self) -> Dict[str, Any]:
-        return {k: o.get() for k, o in self.__dict__.items() }
-    
-    def is_valid(self) -> bool:
-        return all(key in self.__dict__.items() for key in self.SCHEMA.keys())
+    def get(self) -> dict:
+        return {"path": str(self.path), "version": self.version}
+
+class UCXLibraryEntry(LibraryEntry):
+    SCHEMA = {
+        "install": UCXInstallEntry
+    }
+
+# ---- UCC Library ----
+
+class UCCInstallEntry(PathConfigEntry):
+    """
+    A PathConfigEntry that must point to a UCC installation.
+    Validation: runs `<path>/bin/ucc_info -v`.
+    """
+
+    def set(self, value: Any):
+        super().set(value)  # validates path exists
+        bin_dir = self.path / "bin" / "ucc_info"
+        if not bin_dir.exists():
+            raise ConfigEntryError(f"No ucc_info binary found in {self.path}/bin")
+
+        try:
+            result = subprocess.run(
+                [str(bin_dir), "-v"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            match = re.search(r"# UCC version=([0-9]+\.[0-9]+\.[0-9]+)", result.stdout)
+            if not match:
+                raise ConfigEntryError(
+                    f"Could not get version from ucc_info: {result.stdout}"
+                )
+            self.version = match.group(1)
+        except subprocess.CalledProcessError as e:
+            raise ConfigEntryError(
+                f"ucc_info failed in {self.path}: {e.stderr.strip()}"
+            )
+
+    def get(self) -> dict:
+        return {"path": str(self.path), "version": self.version}
+
+class UCCLibraryEntry(LibraryEntry):
+    SCHEMA = {
+        "install": UCCInstallEntry
+    }
+
+# ---- Runtime Entries ----
 
 class RuntimeConfigEntry(CompositeConfigEntry):
-    CFG_KEY = None 
-
     SCHEMA = {
-        'program': StrConfigEntry,
-        'args': StrConfigEntry 
+        "program": ProgramConfigEntry,
     }
 
-    def __init__(self, value: Dict[str, Any]):
-        super().__init__(value, RuntimeConfigEntry.SCHEMA)
+class X11EnumConfigEntry(EnumConfigEntry):
+    ALLOWED_VALUES = ["batch", "first", "last", "all"]
 
-class EnvironmentConfigEntry(CompositeConfigEntry):
-    CFG_KEY = None 
+class SlurmRuntimeConfigEntry(RuntimeConfigEntry):
 
-    SCHEMA: Optional[Dict[str, ConfigEntry]] = None
+    SCHEMA = {
+        "nodes": IntConfigEntry,
+        "ntasks-per-node": IntConfigEntry,
+        "partition": StrConfigEntry,
+        "account": StrConfigEntry,
+        "x11": X11EnumConfigEntry,
+    }
 
-    def set(self, value: Dict[str, Any], required: Dict[str, Any]):
-        for key in value.keys():
-            setattr(self, key, StrConfigEntry(str(value[key])))
+# ---- Executable Entry ----
+
+class WrapperEnumConfigEntry(EnumConfigEntry):
+    ALLOWED_VALUES = ["std", "gdb", "perf", "valgrind", "log"]
+
+class ExecutableConfigEntry(CompositeConfigEntry):
+    SCHEMA = {
+        "path": ExecutableConfigEntry,
+        "args": StrConfigEntry,
+        "wrapper": WrapperEnumConfigEntry
+    }
+
+# ---- Root Entry ----
 
 class RootConfigEntry(CompositeConfigEntry):
-    CFG_KEY = None 
-
     SCHEMA = {
-        'runtime': RuntimeConfigEntry,
-        'environment': EnvironmentConfigEntry
+        "runtime": SlurmRuntimeConfigEntry,
+        "mpi": MPILibraryEntry,
+        "ucx": UCXLibraryEntry,
+        "ucc": UCCLibraryEntry,
+        "executable": ExecutableConfigEntry
     }
 
-    def __init__(self, value: Dict[str, Any]):
-        super().__init__(value, RootConfigEntry.SCHEMA)
-
-    def is_valid(self) -> bool:
-        return True 
-
 class Config():
+    
+    def __init__(self, key: Optional[str] = None):
+        if key:
+            # take root key and then class
+            root = GetConfigEntryClass(RootConfigEntry, CFG_KEY=key)
 
-    def __init__(self, value: Dict[str, Any]):
-        if len(value.keys()) > 1:
-            raise ConfigEntryError(f"Root config must have only one key.")
+            if (not issubclass(root, RootConfigEntry)):
+                raise ConfigEntryError(f"Provided config is not a root config.")
 
-        # take root key and then class
-        rkey = next(iter(value))
-        root = GetConfigEntryClass(RootConfigEntry, CFG_KEY=rkey)
+            self.root = root(value[rkey])
+
+    def is_loaded(self):
+        return hasattr(self, 'root')
+        
+    def list(self):
+        """
+        List all available configs.
+        """
+        return [key for key in _CFG_REGISTRY.keys()]
+
+    def load(self, key: str):
+        """
+        Load a specific config.
+        """
+        if key not in _CFG_REGISTRY:
+            raise ConfigEntryError(f"Provided config is not available. key={key}")
+        
+        root = GetConfigEntryClass(RootConfigEntry, CFG_KEY=key)
 
         if (not issubclass(root, RootConfigEntry)):
             raise ConfigEntryError(f"Provided config is not a root config.")
 
-        self.root = root(value[rkey])
-        
+        self.root = root(root.DEFAULT)
+
+    def show(self):
+        if not self.is_loaded():
+            raise ConfigEntryError(f"No config was loaded.")
+
+        print(self.root.get())
+
+class CommandBuilder():
+    def __init__(self, c: Config):
+        self.c = c
+            
+
