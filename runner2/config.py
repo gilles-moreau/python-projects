@@ -2,7 +2,7 @@ import subprocess
 import re
 import json
 import abc
-from typing import Any, Optional
+from typing import Any, Optional, Dict
 
 from base import \
     GetConfigEntryClass, \
@@ -272,7 +272,8 @@ class AppConfigEntry(CompositeConfigEntry):
 
 # ---- Root Entry ----
 
-class RootConfigEntry(CompositeConfigEntry):
+class RootConfigEntry(CompositeConfigEntry, metaclass=abc.ABCMeta):
+    DEFAULT: dict = None
     SCHEMA = {
         "runtime": RuntimeConfigEntry,
         "mpi": MPILibraryEntry,
@@ -281,22 +282,37 @@ class RootConfigEntry(CompositeConfigEntry):
         "app": AppConfigEntry
     }
 
+    # Enforce subclass to have a DEFAULT configuration
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if not hasattr(cls, "DEFAULT") or cls.DEFAULT is None:
+            raise TypeError(f"{cls.__name__} must define a DEFAULT configuration")
+
+    def __init__(self, value: Optional[Dict[str, Any]] = None, 
+                 check: bool = True):
+        if value is None:
+            value = type(self).DEFAULT
+        super().__init__(value, check)
+
     def __str__(self):
         return f"{str(self._runtime)} {str(self._app)}"
 
 class Config():
+    """
+    Configuration object that can read from JSON file. It respects the 
+    specification defined by the ConfigEntry implementation.
+    """
     
-    def __init__(self, key: Optional[str] = None):
-        if key:
-            # take root key and then class
-            root = GetConfigEntryClass(RootConfigEntry, CFG_KEY=key)
+    def __init__(self, name: Optional[str] = None, json_path: Optional[str] = None):
+        if name:
+            value = None
+        elif path:
+            value = self.read(json_path)
+            name = None
 
-            if (not issubclass(root, RootConfigEntry)):
-                raise ConfigEntryError(f"Provided config is not a root config.")
+        self.load(name=name, value=value)
 
-            self.root = root(value[rkey])
-
-    def is_loaded(self):
+    def isloaded(self):
         return hasattr(self, 'root')
         
     def list(self):
@@ -305,22 +321,29 @@ class Config():
         """
         return [key for key in _CFG_REGISTRY.keys()]
 
-    def load(self, key: str):
+    def load(self, name: str = None, value: Dict[str, Any] = None):
         """
-        Load a config from its root key. For example, "osu".
+        Load a config from its root key and thus default configuraiton 
+        or a json config.
         """
-        if key not in _CFG_REGISTRY:
-            raise ConfigEntryError(f"Provided config is not available. key={key}")
-        
-        root = GetConfigEntryClass(RootConfigEntry, CFG_KEY=key)
+        if name is not None:
+            value = None
+        elif value is not None:
+            name = next(iter(value))
+            value = value[name]
+        else:
+            raise ConfigEntryError(f"Must at least provide a key or a json config")
 
-        if (not issubclass(root, RootConfigEntry)):
-            raise ConfigEntryError(f"Provided config is not a root config.")
+        if name not in _CFG_REGISTRY:
+            raise ConfigEntryError(f"Provided config is not available. name={name}")
+        self.root = GetConfigEntryClass(RootConfigEntry, CFG_KEY=name)(value, check=False)
 
-        self.root = root(root.DEFAULT, check=False)
+    def read(self, json_path: str):
+        with open(json_path) as f:
+           value = json.load(f)
 
     def show(self):
-        if not self.is_loaded():
+        if not self.isloaded():
             raise ConfigEntryError(f"No config was loaded.")
 
         print(self.root.get())
