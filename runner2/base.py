@@ -67,7 +67,8 @@ class ConfigEntryError(Exception):
 class ConfigEntry(metaclass=AutoRegisterConfigEntryMeta):
     CFG_KEY: Optional[str] = None
 
-    def __init__(self, value: Any = None):
+    def __init__(self, value: Any = None, check: bool = True):
+        self.check = check
         if value is not None:
             self.set(value)
 
@@ -82,8 +83,11 @@ class ConfigEntry(metaclass=AutoRegisterConfigEntryMeta):
 class IntConfigEntry(ConfigEntry):
     CFG_KEY = None
 
+    def __init__(self, value: Any = None, check: bool = True):
+        super().__init__(value, check)
+
     def set(self, value: Any):
-        if not isinstance(value, int):
+        if self.check and not isinstance(value, int):
             raise ConfigEntryError(f"Expected int, got {type(value)}")
         self.value = value
 
@@ -94,13 +98,17 @@ class IntConfigEntry(ConfigEntry):
 class StrConfigEntry(ConfigEntry):
     CFG_KEY = None
 
+    def __init__(self, value: Any = None, check: bool = True):
+        super().__init__(value, check)
+
     def set(self, value: Any):
-        if not isinstance(value, str):
+        if self.check and not isinstance(value, str):
             raise ConfigEntryError(f"Expected str, got {type(value)}")
         self.value = value
 
     def get(self) -> str:
         return self.value
+
 
 class EnumConfigEntry(StrConfigEntry):
     """
@@ -109,16 +117,12 @@ class EnumConfigEntry(StrConfigEntry):
 
     ALLOWED_VALUES: List[str] = []
 
-    def __init__(self, value: Any = None):
-        if not self.ALLOWED_VALUES:
-            raise ConfigEntryError(
-                f"{self.__class__.__name__} must define ALLOWED_VALUES"
-            )
-        super().__init__(value)
+    def __init__(self, value: Any = None, check: bool = True):
+        super().__init__(value, check)
 
     def set(self, value: Any):
         super().set(value)  # ensures it is a string
-        if self.value not in self.ALLOWED_VALUES:
+        if self.check and self.value not in self.ALLOWED_VALUES:
             raise ConfigEntryError(
                 f"Invalid value '{self.value}' for {self.__class__.__name__}. "
                 f"Allowed: {self.ALLOWED_VALUES}"
@@ -132,6 +136,9 @@ class PathConfigEntry(StrConfigEntry):
     A string entry that must be a valid filesystem path.
     """
 
+    def __init__(self, value: Any = None, check: bool = True):
+        super().__init__(value, check)
+
     def set(self, value: Any = None):
         super().set(value)  # still a string
         path = Path(self.value)
@@ -140,7 +147,7 @@ class PathConfigEntry(StrConfigEntry):
             # Resolve relative path relative to current working directory
             path = path.resolve()
 
-        if not path.exists():
+        if self.check and not path.exists():
             raise ConfigEntryError(f"Path does not exist: {self.value}")
 
         self.path = path  # store Path object for convenience
@@ -154,12 +161,15 @@ class ProgramConfigEntry(StrConfigEntry):
     Validation: checks that the program exists in the system PATH.
     """
 
+    def __init__(self, value: Any = None, check: bool = True):
+        super().__init__(value, check)
+
     def set(self, value: str):
         super().set(value)  # ensure it's a string
 
         # Check if the program exists in PATH
         prog_path = shutil.which(self.value)
-        if prog_path is None:
+        if self.check and prog_path is None:
             raise ConfigEntryError(f"Program '{self.value}' not found in system PATH")
         
         self.path = prog_path  # store full path for convenience
@@ -167,19 +177,28 @@ class ProgramConfigEntry(StrConfigEntry):
     def get(self) -> str:
         return self.path
 
+    def __str__(self):
+        return self.path
+
 class ExecutableConfigEntry(PathConfigEntry):
     """
     A PathConfigEntry that ensures the path points to an executable file.
     """
 
+    def __init__(self, value: Any = None, check: bool = True):
+        super().__init__(value, check)
+
     def set(self, value: str):
         super().set(value)  # ensures path exists
-        if not self.path.is_file():
+        if self.check and not self.path.is_file():
             raise ConfigEntryError(f"Path is not a file: {self.path}")
-        if not os.access(self.path, os.X_OK):
+        if self.check and not os.access(self.path, os.X_OK):
             raise ConfigEntryError(f"File is not executable: {self.path}")
 
     def get(self) -> str:
+        return str(self.path)
+
+    def __str__(self):
         return str(self.path)
 
 # ---- Composite Entries ----
@@ -191,9 +210,9 @@ class TableConfigEntry(ConfigEntry):
     - no predefined schema, arbitrary columns allowed
     """
 
-    def __init__(self, value: Optional[list] = None):
+    def __init__(self, value: Optional[list] = None, check: bool = True):
         self.rows: list[dict] = []
-        super().__init__(value)
+        super().__init__(value, check)
 
     def set(self, value: list):
         if not isinstance(value, list):
@@ -211,8 +230,8 @@ class TableConfigEntry(ConfigEntry):
 class CompositeConfigEntry(ConfigEntry, metaclass=CompositeConfigMeta):
     SCHEMA: Dict[str, type] = {}
 
-    def __init__(self, value: Optional[Dict[str, Any]] = None):
-        super().__init__(value)
+    def __init__(self, value: Optional[Dict[str, Any]] = None, check: bool = True):
+        super().__init__(value, check)
 
     def set(self, value: Dict[str, Any]):
         if not isinstance(value, dict):
@@ -223,7 +242,7 @@ class CompositeConfigEntry(ConfigEntry, metaclass=CompositeConfigMeta):
                 raise ConfigEntryError(
                     f"Missing required key '{k}' in {type(self).__name__}"
                 )
-            setattr(self, "_" + k, entry_cls(value[k]))
+            setattr(self, "_" + k, entry_cls(value[k], self.check))
 
     def get(self) -> Dict[str, Any]:
         return {k: v.get() for k, v in self.__dict__.items() if k.startswith("_")}

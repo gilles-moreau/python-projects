@@ -1,16 +1,32 @@
 from config import *
 
+class OSUArgListConfigEntry(ArgListConfigEntry):
+
+    def __str__(self):
+        s = ""
+        for row in self.rows:
+            for k, v in row.items():
+                s += f"-{k} {v} " 
+        return s
+
+class OSUExecutableConfigEntry(ExecutableConfigEntry):
+    SCHEMA = {
+        "args": OSUArgListConfigEntry
+    }
+
 class OSUConfigEntry(RootConfigEntry):
     CFG_KEY = "osu"
 
     DEFAULT = {
         "runtime": {
             "program": "srun",
-            "nodes": 2,
-            "ntasks-per-node": 1,
-            "account": "inti0037@cpu",
-            "partition": "rome-bxi",
-            "x11": "batch"
+            "args": [
+                {"nodes": 2},
+                {"ntasks-per-node": 1},
+                {"account": "inti0037@cpu"},
+                {"partition": "rome-bxi"},
+                {"x11": "batch"}
+            ]
         },
         "mpi": {
             "install": "/ccc/work/cont002/forth/moreaugs/install/install-ompi5-bxi-rel/",
@@ -42,9 +58,12 @@ class OSUConfigEntry(RootConfigEntry):
                 {"UCC_TL_UCP_GATHER_KN_RADIX": "2"},
             ]
         },
-        "executable": {
+        "app": {
             "path": "/ccc/work/cont002/forth/moreaugs/install/install-osu-micro-benchmark-ompi5-rel/libexec/osu-micro-benchmarks/mpi/pt2pt/osu_bw",
-            "args": "-b single",
+            "args": [
+                {"b": "single"},
+                {"m": "1:"},
+            ],
             "wrapper": "std"
         }
     }
@@ -57,5 +76,5 @@ if __name__ == "__main__": # Create a composite config with nested entries
 
     c.load("osu")
 
-    print(c.root._ucx)
+    print(c.root)
 
