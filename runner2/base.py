@@ -109,6 +109,8 @@ class StrConfigEntry(ConfigEntry):
     def get(self) -> str:
         return self.value
 
+    def __str__(self):
+        return self.value
 
 class EnumConfigEntry(StrConfigEntry):
     """
@@ -153,6 +155,9 @@ class PathConfigEntry(StrConfigEntry):
         self.path = path  # store Path object for convenience
 
     def get(self) -> str:
+        return str(self.path)
+
+    def __str__(self):
         return str(self.path)
 
 class ProgramConfigEntry(StrConfigEntry):

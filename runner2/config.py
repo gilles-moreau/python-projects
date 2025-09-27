@@ -182,7 +182,7 @@ class RuntimeConfigEntry(CompositeConfigEntry):
     }
 
     def __str__(self):
-        return f"{str(self._program)} {str(self._args)}--"
+        return f"{str(self._program)} {str(self._args)}-- "
 
 # ---- Executable Entry ----
 
@@ -260,9 +260,19 @@ class WrapperEnumConfigEntry(EnumConfigEntry):
     def suffix(self) -> str:
         return self.wrapper.suffix()
 
+class EnvConfigEntry(CompositeConfigEntry):
+    SCHEMA = {
+        "mpi": MPILibraryEntry,
+        "ucx": UCXLibraryEntry,
+        "ucc": UCCLibraryEntry,
+    }
+
+    def __str__(self):
+        return f"{self._mpi}\n{str(self._ucx)}\n{self._ucc}\n"
+
 class AppConfigEntry(CompositeConfigEntry):
     SCHEMA = {
-        "path": ExecutableConfigEntry,
+        "bin": ExecutableConfigEntry,
         "args": ArgListConfigEntry,
         "wrapper": WrapperEnumConfigEntry
     }
@@ -276,10 +286,8 @@ class RootConfigEntry(CompositeConfigEntry, metaclass=abc.ABCMeta):
     DEFAULT: dict = None
     SCHEMA = {
         "runtime": RuntimeConfigEntry,
-        "mpi": MPILibraryEntry,
-        "ucx": UCXLibraryEntry,
-        "ucc": UCCLibraryEntry,
-        "app": AppConfigEntry
+        "app": AppConfigEntry,
+        "env": EnvConfigEntry
     }
 
     # Enforce subclass to have a DEFAULT configuration
@@ -295,7 +303,11 @@ class RootConfigEntry(CompositeConfigEntry, metaclass=abc.ABCMeta):
         super().__init__(value, check)
 
     def __str__(self):
-        return f"{str(self._runtime)} {str(self._app)}"
+        s =  f"{str(self._env)}"
+        s += f"{str(self._runtime)}"
+        s += f"{str(self._app)}"
+
+        return s.strip()
 
 class Config():
     """
@@ -323,7 +335,7 @@ class Config():
 
     def load(self, name: str = None, value: Dict[str, Any] = None):
         """
-        Load a config from its root key and thus default configuraiton 
+        Load a config from its root key and thus default configuration 
         or a json config.
         """
         if name is not None:
@@ -336,7 +348,7 @@ class Config():
 
         if name not in _CFG_REGISTRY:
             raise ConfigEntryError(f"Provided config is not available. name={name}")
-        self.root = GetConfigEntryClass(RootConfigEntry, CFG_KEY=name)(value, check=False)
+        self.root = GetConfigEntryClass(RootConfigEntry, CFG_KEY=name)(value)
 
     def read(self, json_path: str):
         with open(json_path) as f:
